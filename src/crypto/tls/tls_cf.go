@@ -51,12 +51,15 @@ func sigTypeByCirclScheme(scheme circlSign.Scheme) uint8 {
 }
 
 var supportedSignatureAlgorithmsWithCircl []SignatureScheme
+var supportedPQSignatureAlgorithms []SignatureScheme
 
 // supportedSignatureAlgorithms returns enabled signature schemes. PQ signature
 // schemes are only included when tls.Config#PQSignatureSchemesEnabled is set.
 func (c *Config) supportedSignatureAlgorithms() []SignatureScheme {
 	if c != nil && c.PQSignatureSchemesEnabled {
 		return supportedSignatureAlgorithmsWithCircl
+	} else if c != nil && c.PSSSignatureSchemesEnabled {
+		return append(supportedSignatureAlgorithms, supportedPSSPSSAlgorithms...)
 	}
 	return supportedSignatureAlgorithms
 }
@@ -66,6 +69,7 @@ func init() {
 	for _, cs := range circlSchemes {
 		supportedSignatureAlgorithmsWithCircl = append(supportedSignatureAlgorithmsWithCircl,
 			SignatureScheme(cs.scheme.(circlPki.TLSScheme).TLSIdentifier()))
+		supportedPQSignatureAlgorithms = append(supportedPQSignatureAlgorithms, SignatureScheme(cs.scheme.(circlPki.TLSScheme).TLSIdentifier()))
 	}
 }
 

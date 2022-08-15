@@ -40,6 +40,11 @@ var (
 )
 
 var SigStringMap = map[string]tls.SignatureScheme{
+	// RSASSA-PSS algorithms with public key OID RSAPSS.
+	"PSSPSSWithSHA256": 0x0809,
+	"PSSPSSWithSHA384": 0x080a,
+	"PSSPSSWithSHA512": 0x080b,
+
 	// ECDSA algorithms. Only constrained to a specific curve in TLS 1.3.
 	"ECDSAWithP256AndSHA256": tls.ECDSAWithP256AndSHA256,
 	"ECDSAWithP384AndSHA384": tls.ECDSAWithP384AndSHA384,

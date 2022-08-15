@@ -23,6 +23,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
+	"encoding/asn1"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -30,6 +31,7 @@ import (
 	"time"
 
 	"golang.org/x/crypto/cryptobyte"
+	cryptobyte_asn1 "golang.org/x/crypto/cryptobyte/asn1"
 )
 
 const (
@@ -44,6 +46,8 @@ const (
 const (
 	undefinedSignatureScheme SignatureScheme = 0x0000
 )
+
+const hasRSAEnc = "certificate has RSA Encryption OID"
 
 var extensionDelegatedCredential = []int{1, 3, 6, 1, 4, 1, 44363, 44}
 
@@ -136,6 +140,13 @@ func (cred *credential) marshalPublicKeyInfo() ([]byte, error) {
 			return nil, err
 		}
 
+		return rawPub, nil
+
+	case PSSPSSWithSHA256, PSSPSSWithSHA384, PSSPSSWithSHA512:
+		rawPub, err := x509.MarshalPKCS8RSAPSSPublicKey(cred.publicKey, getHash(cred.expCertVerfAlgo))
+		if err != nil {
+			return nil, err
+		}
 		return rawPub, nil
 
 	default:
@@ -233,11 +244,11 @@ func getHash(scheme SignatureScheme) crypto.Hash {
 		return crypto.SHA512
 	case Ed25519:
 		return directSigning
-	case PKCS1WithSHA256, PSSWithSHA256:
+	case PKCS1WithSHA256, PSSWithSHA256, PSSPSSWithSHA256:
 		return crypto.SHA256
-	case PSSWithSHA384:
+	case PSSWithSHA384, PSSPSSWithSHA384:
 		return crypto.SHA384
-	case PSSWithSHA512:
+	case PSSWithSHA512, PSSPSSWithSHA512:
 		return crypto.SHA512
 	default:
 		return 0 //Unknown hash function
@@ -279,7 +290,6 @@ func prepareDelegationSignatureInput(hash crypto.Hash, cred *credential, dCert [
 
 	var rawAlgo [2]byte
 	binary.BigEndian.PutUint16(rawAlgo[:], uint16(algo))
-
 	if hash == directSigning {
 		b := &bytes.Buffer{}
 		b.Write(header)
@@ -319,12 +329,132 @@ func getSignatureAlgorithm(cert *Certificate) (SignatureScheme, error) {
 	case ed25519.PrivateKey:
 		return Ed25519, nil
 	case *rsa.PrivateKey:
-		// If the certificate has the RSAEncryption OID there are a number of valid signature schemes that may sign the DC.
-		// In the absence of better information, we make a reasonable choice.
-		return PSSWithSHA256, nil
+		sigAlgo, err := parsePSSPublicKeyInfo(cert.Leaf.RawSubjectPublicKeyInfo)
+		if err != nil {
+			if err.Error() == hasRSAEnc {
+				// If the certificate has the RSAEncryption OID there are a number of valid signature schemes that may sign the DC.
+				// In the absence of better information, we make a reasonable choice.
+				return PSSWithSHA256, nil
+			} else {
+				return undefinedSignatureScheme, err
+			}
+		}
+		return sigAlgo, nil
 	default:
 		return undefinedSignatureScheme, fmt.Errorf("tls: unsupported algorithm for signing Delegated Credential")
 	}
+}
+
+func parsePSSPublicKeyInfo(rspki []byte) (SignatureScheme, error) {
+	input := cryptobyte.String(rspki)
+	var sigAlgo SignatureScheme
+	var pubKeyAlgOID asn1.ObjectIdentifier
+	var oidMGF = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 1, 8}
+	var oidRSAEncryption = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 1, 1}
+	var oidSignatureRSAPSS = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 1, 10}
+	var oidSHA256 = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 2, 1}
+	var oidSHA384 = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 2, 2}
+	var oidSHA512 = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 2, 3}
+
+	var hashLen = func(oid asn1.ObjectIdentifier) int {
+		switch {
+		case oid.Equal(oidSHA256):
+			return 32
+		case oid.Equal(oidSHA384):
+			return 48
+		case oid.Equal(oidSHA512):
+			return 64
+		default:
+			return -1
+		}
+	}
+
+	if !input.ReadASN1(&input, cryptobyte_asn1.SEQUENCE) {
+		return SignatureScheme(0x00), fmt.Errorf("Certificate malformed (does not begin with ASN.1 SEQUENCE)")
+	}
+	if !input.ReadASN1(&input, cryptobyte_asn1.SEQUENCE) {
+		return SignatureScheme(0x00), fmt.Errorf("Certificate malformed (does not begin with ASN.1 SEQUENCE SEQUENCE)")
+	}
+
+	if !input.ReadASN1ObjectIdentifier(&pubKeyAlgOID) {
+		return SignatureScheme(0x00), fmt.Errorf("could not parse Signature Algorithm OID: %x", input)
+	}
+	if !pubKeyAlgOID.Equal(oidSignatureRSAPSS) {
+		if pubKeyAlgOID.Equal(oidRSAEncryption) {
+			return SignatureScheme(0x00), fmt.Errorf(hasRSAEnc)
+		}
+		return SignatureScheme(0x00), fmt.Errorf("unknown RSA certificate type")
+	}
+	if !input.ReadASN1(&input, cryptobyte_asn1.SEQUENCE) {
+		return SignatureScheme(0x00), fmt.Errorf("RSAPSS parameters malformed")
+	}
+	var out cryptobyte.String
+	var outpresent bool
+	// Get hash algorithm
+	if !input.ReadOptionalASN1(&out, &outpresent, cryptobyte_asn1.Tag(0).Constructed().ContextSpecific()) {
+		return SignatureScheme(0x00), fmt.Errorf("RSAPSS parameters malformed")
+	}
+	if outpresent {
+		if !out.ReadASN1(&out, cryptobyte_asn1.SEQUENCE) {
+			return SignatureScheme(0x00), fmt.Errorf("RSAPSS parameters malformed")
+		}
+		var hashAlg asn1.ObjectIdentifier
+		if !out.ReadASN1ObjectIdentifier(&hashAlg) {
+			return SignatureScheme(0x00), fmt.Errorf("failed to decode RSSPSS hash OID")
+		} else {
+			if oidSHA256.Equal(hashAlg) {
+				sigAlgo = PSSPSSWithSHA256
+			} else if oidSHA384.Equal(hashAlg) {
+				sigAlgo = PSSPSSWithSHA384
+			} else if oidSHA512.Equal(hashAlg) {
+				sigAlgo = PSSPSSWithSHA512
+			} else {
+				return SignatureScheme(0x00), fmt.Errorf("unknown hash algorithm")
+			}
+		}
+		// Get MGF algorithm
+		if !input.ReadOptionalASN1(&out, &outpresent, cryptobyte_asn1.Tag(1).Constructed().ContextSpecific()) {
+			return SignatureScheme(0x00), fmt.Errorf("RSAPSS parameters malformed")
+		}
+		if outpresent {
+			if !out.ReadASN1(&out, cryptobyte_asn1.SEQUENCE) {
+				return SignatureScheme(0x00), fmt.Errorf("MGF algorithm parameters malformed")
+			}
+			var mgfAlg asn1.ObjectIdentifier
+			if !out.ReadASN1ObjectIdentifier(&mgfAlg) {
+				return SignatureScheme(0x00), fmt.Errorf("failed to decode RSSPSS MGF OID")
+			}
+			if !mgfAlg.Equal(oidMGF) {
+				return SignatureScheme(0x00), fmt.Errorf("MGF oid missing")
+			}
+			if !out.ReadASN1(&out, cryptobyte_asn1.SEQUENCE) {
+				return SignatureScheme(0x00), fmt.Errorf("MGF parameters malformed")
+			}
+			if !out.ReadASN1ObjectIdentifier(&mgfAlg) {
+				return SignatureScheme(0x00), fmt.Errorf("MGF oid missing")
+			}
+			if !mgfAlg.Equal(hashAlg) {
+				return SignatureScheme(0x00), fmt.Errorf("MGF algorithm doesn't match hash algorithm")
+			}
+		}
+		// Get MGF salt length
+		if !input.ReadOptionalASN1(&out, &outpresent, cryptobyte_asn1.Tag(2).Constructed().ContextSpecific()) {
+			return SignatureScheme(0x00), fmt.Errorf("RSAPSS parameters malformed")
+		}
+		if outpresent {
+			var mgfSaltLen int
+			if !out.ReadASN1Integer(&mgfSaltLen) {
+				return SignatureScheme(0x00), fmt.Errorf("MGF salt length malformed")
+			}
+			if hashLen(hashAlg) != mgfSaltLen {
+				return SignatureScheme(0x00), fmt.Errorf("MGF salt length (%d) doesn't equal hash length (%d)", mgfSaltLen, hashLen(hashAlg))
+			}
+		}
+	} else {
+		return SignatureScheme(0x00), fmt.Errorf("RSAPSS hash algorithm is not specified")
+	}
+
+	return sigAlgo, nil
 }
 
 // NewDelegatedCredential creates a new Delegated Credential using 'cert' for
@@ -334,6 +464,7 @@ func getSignatureAlgorithm(cert *Certificate) (SignatureScheme, error) {
 // by 'cert.Leaf.notBefore' and 'validTime'). It signs the Delegated Credential
 // using 'cert.PrivateKey'.
 func NewDelegatedCredential(cert *Certificate, pubAlgo SignatureScheme, validTime time.Duration, isClient bool) (*DelegatedCredential, crypto.PrivateKey, error) {
+	bits := 2048
 	// The granularity of DC validity is seconds.
 	validTime = validTime.Round(time.Second)
 
@@ -376,6 +507,14 @@ func NewDelegatedCredential(cert *Certificate, pubAlgo SignatureScheme, validTim
 		if err != nil {
 			return nil, nil, err
 		}
+	case PSSPSSWithSHA256,
+		PSSPSSWithSHA384,
+		PSSPSSWithSHA512:
+		privK, err = rsa.GenerateKey(rand.Reader, bits)
+		if err != nil {
+			return nil, nil, err
+		}
+		pubK = privK.(*rsa.PrivateKey).Public()
 	default:
 		return nil, nil, fmt.Errorf("tls: unsupported algorithm for Delegated Credential: %s", pubAlgo)
 	}
@@ -476,6 +615,15 @@ func (dc *DelegatedCredential) Validate(cert *x509.Certificate, isClient bool, n
 		}
 		hash := getHash(dc.algorithm)
 		return rsa.VerifyPSS(pk, hash, in, dc.signature, nil) == nil
+	case PSSPSSWithSHA256,
+		PSSPSSWithSHA384,
+		PSSPSSWithSHA512:
+		pk, ok := cert.PublicKey.(*rsa.PublicKey)
+		if !ok {
+			return false
+		}
+		hash := getHash(dc.algorithm)
+		return rsa.VerifyPSS(pk, hash, in, dc.signature, &rsa.PSSOptions{SaltLength: hash.Size(), Hash: hash}) == nil
 	default:
 		return false
 	}

@@ -117,6 +117,44 @@ func marshalPublicKey(pub any) (publicKeyBytes []byte, publicKeyAlgorithm pkix.A
 	return publicKeyBytes, publicKeyAlgorithm, nil
 }
 
+// MarshalPKCS8RSAPSSPublicKey marshals an RSA Public key into an RSA Public key with the RSAPSS oid.
+func MarshalPKCS8RSAPSSPublicKey(pub interface{}, hash crypto.Hash) ([]byte, error) {
+	switch pub := pub.(type) {
+	case *rsa.PublicKey:
+		var publicKeyBytes []byte
+		var publicKeyAlgorithm pkix.AlgorithmIdentifier
+
+		publicKeyBytes, err := asn1.Marshal(pkcs1PublicKey{
+			N: pub.N,
+			E: pub.E,
+		})
+		if err != nil {
+			return nil, err
+		}
+
+		if err != nil {
+			return nil, err
+		}
+		publicKeyAlgorithm.Algorithm = oidSignatureRSAPSS
+		publicKeyAlgorithm.Parameters = hashToPSSParameters[hash]
+		pkix := pkixPublicKey{
+			Algo: publicKeyAlgorithm,
+			BitString: asn1.BitString{
+				Bytes:     publicKeyBytes,
+				BitLength: 8 * len(publicKeyBytes),
+			},
+		}
+
+		ret, err := asn1.Marshal(pkix)
+		if err != nil {
+			return nil, err
+		}
+		return ret, nil
+	default:
+		return nil, fmt.Errorf("tls: non-RSA key passed to MarshalPKCS8RSAPSSPublicKey")
+	}
+}
+
 // MarshalPKIXPublicKey converts a public key to PKIX, ASN.1 DER form.
 // The encoded public key is a SubjectPublicKeyInfo structure
 // (see RFC 5280, Section 4.1).
@@ -315,10 +353,10 @@ var (
 	oidSignatureMD2WithRSA      = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 1, 2}
 	oidSignatureMD5WithRSA      = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 1, 4}
 	oidSignatureSHA1WithRSA     = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 1, 5}
+	oidSignatureRSAPSS          = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 1, 10}
 	oidSignatureSHA256WithRSA   = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 1, 11}
 	oidSignatureSHA384WithRSA   = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 1, 12}
 	oidSignatureSHA512WithRSA   = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 1, 13}
-	oidSignatureRSAPSS          = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 1, 10}
 	oidSignatureDSAWithSHA1     = asn1.ObjectIdentifier{1, 2, 840, 10040, 4, 3}
 	oidSignatureDSAWithSHA256   = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 3, 2}
 	oidSignatureECDSAWithSHA1   = asn1.ObjectIdentifier{1, 2, 840, 10045, 4, 1}
@@ -376,6 +414,12 @@ var hashToPSSParameters = map[crypto.Hash]asn1.RawValue{
 	crypto.SHA256: asn1.RawValue{FullBytes: []byte{48, 52, 160, 15, 48, 13, 6, 9, 96, 134, 72, 1, 101, 3, 4, 2, 1, 5, 0, 161, 28, 48, 26, 6, 9, 42, 134, 72, 134, 247, 13, 1, 1, 8, 48, 13, 6, 9, 96, 134, 72, 1, 101, 3, 4, 2, 1, 5, 0, 162, 3, 2, 1, 32}},
 	crypto.SHA384: asn1.RawValue{FullBytes: []byte{48, 52, 160, 15, 48, 13, 6, 9, 96, 134, 72, 1, 101, 3, 4, 2, 2, 5, 0, 161, 28, 48, 26, 6, 9, 42, 134, 72, 134, 247, 13, 1, 1, 8, 48, 13, 6, 9, 96, 134, 72, 1, 101, 3, 4, 2, 2, 5, 0, 162, 3, 2, 1, 48}},
 	crypto.SHA512: asn1.RawValue{FullBytes: []byte{48, 52, 160, 15, 48, 13, 6, 9, 96, 134, 72, 1, 101, 3, 4, 2, 3, 5, 0, 161, 28, 48, 26, 6, 9, 42, 134, 72, 134, 247, 13, 1, 1, 8, 48, 13, 6, 9, 96, 134, 72, 1, 101, 3, 4, 2, 3, 5, 0, 162, 3, 2, 1, 64}},
+}
+
+var hashToPSSParametersNoNull = map[crypto.Hash]asn1.RawValue{
+	crypto.SHA256: asn1.RawValue{FullBytes: []byte{48, 48, 160, 13, 48, 11, 6, 9, 96, 134, 72, 1, 101, 3, 4, 2, 1, 161, 26, 48, 24, 6, 9, 42, 134, 72, 134, 247, 13, 1, 1, 8, 48, 11, 6, 9, 96, 134, 72, 1, 101, 3, 4, 2, 1, 162, 3, 2, 1, 32}},
+	crypto.SHA384: asn1.RawValue{FullBytes: []byte{48, 48, 160, 13, 48, 11, 6, 9, 96, 134, 72, 1, 101, 3, 4, 2, 2, 161, 26, 48, 24, 6, 9, 42, 134, 72, 134, 247, 13, 1, 1, 8, 48, 11, 6, 9, 96, 134, 72, 1, 101, 3, 4, 2, 2, 162, 3, 2, 1, 48}},
+	crypto.SHA512: asn1.RawValue{FullBytes: []byte{48, 48, 160, 13, 48, 11, 6, 9, 96, 134, 72, 1, 101, 3, 4, 2, 3, 161, 26, 48, 24, 6, 9, 42, 134, 72, 134, 247, 13, 1, 1, 8, 48, 11, 6, 9, 96, 134, 72, 1, 101, 3, 4, 2, 3, 162, 3, 2, 1, 64}},
 }
 
 // pssParameters reflects the parameters in an AlgorithmIdentifier that
@@ -462,6 +506,7 @@ func getSignatureAlgorithmFromAI(ai pkix.AlgorithmIdentifier) SignatureAlgorithm
 //       iso(1) member-body(2) us(840) ansi-X9-62(10045) keyType(2) 1 }
 var (
 	oidPublicKeyRSA     = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 1, 1}
+	oidPublicKeyRSAPSS  = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 1, 10}
 	oidPublicKeyDSA     = asn1.ObjectIdentifier{1, 2, 840, 10040, 4, 1}
 	oidPublicKeyECDSA   = asn1.ObjectIdentifier{1, 2, 840, 10045, 2, 1}
 	oidPublicKeyEd25519 = oidSignatureEd25519
@@ -470,6 +515,8 @@ var (
 func getPublicKeyAlgorithmFromOID(oid asn1.ObjectIdentifier) PublicKeyAlgorithm {
 	switch {
 	case oid.Equal(oidPublicKeyRSA):
+		return RSA
+	case oid.Equal(oidPublicKeyRSAPSS):
 		return RSA
 	case oid.Equal(oidPublicKeyDSA):
 		return DSA

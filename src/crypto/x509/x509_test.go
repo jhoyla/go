@@ -1912,7 +1912,7 @@ func TestRSAMissingNULLParameters(t *testing.T) {
 	block, _ := pem.Decode([]byte(certMissingRSANULL))
 	if _, err := ParseCertificate(block.Bytes); err == nil {
 		t.Error("unexpected success when parsing certificate with missing RSA NULL parameter")
-	} else if !strings.Contains(err.Error(), "missing NULL") {
+	} else if !strings.Contains(err.Error(), "could not parse RSA key parameters") {
 		t.Errorf("unrecognised error when parsing certificate with missing RSA NULL parameter: %s", err)
 	}
 }

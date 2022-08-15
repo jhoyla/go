@@ -5,6 +5,7 @@ package x509
 
 import (
 	"bytes"
+	"crypto"
 	"crypto/dsa"
 	"crypto/ecdsa"
 	"crypto/ed25519"
@@ -240,12 +241,22 @@ func parsePublicKey(algo PublicKeyAlgorithm, keyData *publicKeyInfo) (any, error
 	der := cryptobyte.String(keyData.PublicKey.RightAlign())
 	switch algo {
 	case RSA:
-		// RSA public keys must have a NULL in the parameters.
-		// See RFC 3279, Section 2.3.1.
 		if !bytes.Equal(keyData.Algorithm.Parameters.FullBytes, asn1.NullBytes) {
-			return nil, errors.New("x509: RSA key missing NULL parameters")
+			parameterMatch := false
+			for _, hash := range []crypto.Hash{crypto.SHA256, crypto.SHA384, crypto.SHA512} {
+				if bytes.Equal(keyData.Algorithm.Parameters.FullBytes, hashToPSSParameters[hash].FullBytes) {
+					parameterMatch = true
+					break
+				}
+				if bytes.Equal(keyData.Algorithm.Parameters.FullBytes, hashToPSSParametersNoNull[hash].FullBytes) {
+					parameterMatch = true
+					break
+				}
+			}
+			if !parameterMatch {
+				return nil, fmt.Errorf("x509: could not parse RSA key parameters: %x", keyData.Algorithm.Parameters.FullBytes)
+			}
 		}
-
 		p := &pkcs1PublicKey{N: new(big.Int)}
 		if !der.ReadASN1(&der, cryptobyte_asn1.SEQUENCE) {
 			return nil, errors.New("x509: invalid RSA public key")

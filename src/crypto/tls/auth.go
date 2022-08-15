@@ -14,6 +14,7 @@ import (
 	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rsa"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"hash"
@@ -112,7 +113,7 @@ func typeAndHashFromSignatureScheme(signatureAlgorithm SignatureScheme) (sigType
 	switch signatureAlgorithm {
 	case PKCS1WithSHA1, PKCS1WithSHA256, PKCS1WithSHA384, PKCS1WithSHA512:
 		sigType = signaturePKCS1v15
-	case PSSWithSHA256, PSSWithSHA384, PSSWithSHA512:
+	case PSSWithSHA256, PSSWithSHA384, PSSWithSHA512, PSSPSSWithSHA256, PSSPSSWithSHA384, PSSPSSWithSHA512:
 		sigType = signatureRSAPSS
 	case ECDSAWithSHA1, ECDSAWithP256AndSHA256, ECDSAWithP384AndSHA384, ECDSAWithP521AndSHA512:
 		sigType = signatureECDSA
@@ -132,11 +133,11 @@ func typeAndHashFromSignatureScheme(signatureAlgorithm SignatureScheme) (sigType
 	switch signatureAlgorithm {
 	case PKCS1WithSHA1, ECDSAWithSHA1:
 		hash = crypto.SHA1
-	case PKCS1WithSHA256, PSSWithSHA256, ECDSAWithP256AndSHA256:
+	case PKCS1WithSHA256, PSSWithSHA256, PSSPSSWithSHA256, ECDSAWithP256AndSHA256:
 		hash = crypto.SHA256
-	case PKCS1WithSHA384, PSSWithSHA384, ECDSAWithP384AndSHA384:
+	case PKCS1WithSHA384, PSSWithSHA384, PSSPSSWithSHA384, ECDSAWithP384AndSHA384:
 		hash = crypto.SHA384
-	case PKCS1WithSHA512, PSSWithSHA512, ECDSAWithP521AndSHA512:
+	case PKCS1WithSHA512, PSSWithSHA512, PSSPSSWithSHA512, ECDSAWithP521AndSHA512:
 		hash = crypto.SHA512
 	case Ed25519:
 		hash = directSigning
@@ -191,6 +192,18 @@ var rsaSignatureSchemes = []struct {
 	{PKCS1WithSHA1, 15 + crypto.SHA1.Size() + 11, VersionTLS12},
 }
 
+var rsaPssSignatureSchemes = map[SignatureScheme]*struct {
+	minModulusBytes int
+	maxVersion      uint16
+}{
+	// RSA-PSS-PSS is used with PSSSaltLengthEqualsHash, and requires
+	// 	  emLen >= hLen + sLen + 2
+
+	PSSPSSWithSHA256: {minModulusBytes: crypto.SHA256.Size()*2 + 2, maxVersion: VersionTLS13},
+	PSSPSSWithSHA384: {minModulusBytes: crypto.SHA384.Size()*2 + 2, maxVersion: VersionTLS13},
+	PSSPSSWithSHA512: {minModulusBytes: crypto.SHA512.Size()*2 + 2, maxVersion: VersionTLS13},
+}
+
 // signatureSchemesForCertificate returns the list of supported SignatureSchemes
 // for a given certificate, based on the public key and the protocol version,
 // and optionally filtered by its explicit SupportedSignatureAlgorithms.
@@ -227,6 +240,21 @@ func signatureSchemesForCertificate(version uint16, cert *Certificate) []Signatu
 			return nil
 		}
 	case *rsa.PublicKey:
+		if cert.Leaf == nil {
+			var err error
+			cert.Leaf, err = x509.ParseCertificate(cert.Certificate[0])
+			if err != nil {
+				return nil
+			}
+		}
+		pssalg, err := parsePSSPublicKeyInfo(cert.Leaf.RawSubjectPublicKeyInfo)
+		if err == nil {
+			if !(pub.Size() > rsaPssSignatureSchemes[pssalg].minModulusBytes && version <= rsaPssSignatureSchemes[pssalg].maxVersion) {
+				return nil
+			}
+			sigAlgs = []SignatureScheme{pssalg}
+			break
+		}
 		size := pub.Size()
 		sigAlgs = make([]SignatureScheme, 0, len(rsaSignatureSchemes))
 		for _, candidate := range rsaSignatureSchemes {

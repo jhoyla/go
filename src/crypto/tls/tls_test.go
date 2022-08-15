@@ -827,6 +827,8 @@ func TestCloneNonFuncFields(t *testing.T) {
 			f.Set(reflect.ValueOf([]CurveID{CurveP256}))
 		case "PQSignatureSchemesEnabled":
 			f.Set(reflect.ValueOf(true))
+		case "PSSSignatureSchemesEnabled":
+			f.Set(reflect.ValueOf(true))
 		case "Renegotiation":
 			f.Set(reflect.ValueOf(RenegotiateOnceAsClient))
 		case "mutex", "autoSessionTicketKeys", "sessionTicketKeys":

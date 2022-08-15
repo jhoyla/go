@@ -195,6 +195,12 @@ var supportedSignatureAlgorithms = []SignatureScheme{
 	ECDSAWithSHA1,
 }
 
+var supportedPSSPSSAlgorithms = []SignatureScheme{
+	PSSPSSWithSHA256,
+	PSSPSSWithSHA384,
+	PSSPSSWithSHA512,
+}
+
 // supportedSignatureAlgorithmsDC contains the signature and hash algorithms that
 // the code advertises as supported in a TLS 1.3 ClientHello and in a TLS 1.3
 // CertificateRequest. This excludes 'rsa_pss_rsae_' algorithms.
@@ -203,6 +209,9 @@ var supportedSignatureAlgorithmsDC = []SignatureScheme{
 	Ed25519,
 	ECDSAWithP384AndSHA384,
 	ECDSAWithP521AndSHA512,
+	PSSPSSWithSHA256,
+	PSSPSSWithSHA384,
+	PSSPSSWithSHA512,
 }
 
 // helloRetryRequestRandom is set as the Random value of a ServerHello
@@ -452,6 +461,11 @@ const (
 	PSSWithSHA256 SignatureScheme = 0x0804
 	PSSWithSHA384 SignatureScheme = 0x0805
 	PSSWithSHA512 SignatureScheme = 0x0806
+
+	// RSASSA-PSS algorithms with public key OID RSASSA-PSS.
+	PSSPSSWithSHA256 SignatureScheme = 0x0809
+	PSSPSSWithSHA384 SignatureScheme = 0x080a
+	PSSPSSWithSHA512 SignatureScheme = 0x080b
 
 	// ECDSA algorithms. Only constrained to a specific curve in TLS 1.3.
 	ECDSAWithP256AndSHA256 SignatureScheme = 0x0403
@@ -807,6 +821,10 @@ type Config struct {
 	// signature schemes, see tls_cf.go.
 	PQSignatureSchemesEnabled bool
 
+	// PSSSignatureSchemesEnabled controls whether RSASSA-PSS-PSS schemes are offered
+	// or accepted.
+	PSSSignatureSchemesEnabled bool
+
 	// DynamicRecordSizingDisabled disables adaptive sizing of TLS records.
 	// When true, the largest possible TLS record size is always used. When
 	// false, the size of TLS records may be adjusted in an attempt to
@@ -951,6 +969,7 @@ func (c *Config) Clone() *Config {
 		MaxVersion:                  c.MaxVersion,
 		CurvePreferences:            c.CurvePreferences,
 		PQSignatureSchemesEnabled:   c.PQSignatureSchemesEnabled,
+		PSSSignatureSchemesEnabled:  c.PSSSignatureSchemesEnabled,
 		DynamicRecordSizingDisabled: c.DynamicRecordSizingDisabled,
 		Renegotiation:               c.Renegotiation,
 		KeyLogWriter:                c.KeyLogWriter,

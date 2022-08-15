@@ -10,6 +10,8 @@ import (
 	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/x509"
+	"encoding/hex"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"math/rand"
@@ -129,6 +131,7 @@ ZyJKvc2KqjGeZh0Or5pq6ZJb0zR7WPdz5aJIzaZ5YcxLMSv0KwaAEPH2
 -----END EC PRIVATE KEY-----
 `
 
+var rsapssdc = `01e13380040300005b3059301306072a8648ce3d020106082a8648ce3d03010703420004ed5d8bddc6396b1c2e8a0de7b8dd984532c3f32b75fb2e82df05acb83b5fe1a090e5bdc6c97d6161dec8f90f4462cab9663a86cc0d4e0e2adaa947c5cecedfb1080401003394c779e35d8c259f4d9b105b20580a9d99e7393e714464a473ec7a88da61a607d07a12d32397354a634f39d343235659d8fe43894ea4ecdc48fe5f60b5ebd3945ec73e9b5d0212a3709480453bbea7ca590763a0a49745380368f181190e039a248ddaf2425a54acd78796f2d587424e6f61a4085438baf26f17c985a67f2811b49e192b58c83284ca4f5bf4665a7469f2a067b9c6e6647be3de5f9e2bf777f639e76332a262d518d5c9e5a59c6004af4b8a2c905f73b398f5f69ca48e18c846ca36f3076c545b512bdd0c2f7ee782d6d4381e8a494df6d1ceec40afdbaa9976f4b26268f39385ec26459783933a3bae8dcd4950cf4686259c52d26e632fb9`
 var (
 	dcTestConfig            *Config
 	dcTestCerts             map[string]*Certificate
@@ -586,6 +589,7 @@ func TestDCHandshakeServerAuth(t *testing.T) {
 				t.Errorf("test #%d (%s) with signature algorithm #%d usedDC = %v; expected %v", i, test.name, dcCount, usedDC, test.expectDC)
 			}
 		}
+
 	}
 }
 
@@ -649,5 +653,60 @@ func TestDCHandshakeClientAndServerAuth(t *testing.T) {
 
 	if usedDC != true {
 		t.Errorf("test server and client auth does not succeed")
+	}
+}
+
+func TestRSAPSSDC(t *testing.T) {
+	dcBytes, err := hex.DecodeString(rsapssdc)
+	if err != nil {
+		t.Error(err)
+	}
+	_, err = UnmarshalDelegatedCredential(dcBytes)
+	if err != nil {
+		t.Error(err)
+	}
+}
+
+var psscert = `
+-----BEGIN CERTIFICATE-----
+MIIDATCCAqigAwIBAgIUUEl+Yca8uLtjXsaLKfcEmSVetUwwCgYIKoZIzj0EAwIw
+XDELMAkGA1UEBhMCVVMxEzARBgNVBAgMCkNhbGlmb3JuaWExFjAUBgNVBAcMDVNh
+biBGcmFuY2lzY28xETAPBgNVBAoMCEFDTUUgTHRkMQ0wCwYDVQQLDARBQ01FMB4X
+DTIyMDgwNTE1MjgxM1oXDTIzMDgwNTE1MjgxM1owXDELMAkGA1UEBhMCVVMxEzAR
+BgNVBAgMCkNhbGlmb3JuaWExFjAUBgNVBAcMDVNhbiBGcmFuY2lzY28xETAPBgNV
+BAoMCEFDTUUgTHRkMQ0wCwYDVQQLDARBQ01FMIIBUjA9BgkqhkiG9w0BAQowMKAN
+MAsGCWCGSAFlAwQCAaEaMBgGCSqGSIb3DQEBCDALBglghkgBZQMEAgGiAwIBIAOC
+AQ8AMIIBCgKCAQEAwwXkgDSTq1SmmBhUOgYC6CqGO6apRK1L1pXNzVZoZEIwTp77
+S1cQYMptB8PC+Cm+iat7gAaE5UWu1S52HsTligPPt4g6Er9Lm7eGUtNRGAjw+xKu
+pE+P9sWKIRh/JwVeTtkXV01f91T11ntsxRhhx7xlsWwW4TlGCYZYImNh3JFXr3d8
+gyApvUwoflLGKF8j+JuCFaaqTkMdfIrYQy3XnRuSyTgVvvgbtClZKkGVkt0OkQtY
+ty53k6AsD9MncvpfUvSrTN4VcZkpde3g9Qvv5rW2TpjC5Dc6tDTD+Im9U1F86hoF
+TSVFoFlvlkIIX2PH9gGzCvbQWNDunw68i7YIdQIDAQABo00wSzAMBgNVHRMBAf8E
+AjAAMBMGA1UdJQQMMAoGCCsGAQUFBwMBMAsGA1UdDwQEAwIHgDAZBgNVHREEEjAQ
+gg5yc2Fwc3MuZXhhbXBsZTAKBggqhkjOPQQDAgNHADBEAiAm9VVg18ec26MOuExc
+pnewwf+c7EyKhKkNZ/itsc3fgwIgGTFgT2n6lbjNY8oTO067kA1d3oWNqm/hF8+T
+CH8uVaQ=
+-----END CERTIFICATE-----
+`
+
+func TestRSAPSSCert(t *testing.T) {
+	pemBlock, rest := pem.Decode([]byte(psscert))
+	if len(rest) != 0 {
+		t.Fatalf("Failed to decode cert")
+	}
+	cert, err := x509.ParseCertificate(pemBlock.Bytes)
+	if err != nil {
+		t.Fatalf("Failed to parse cert: %v\n", err)
+	}
+	if cert.PublicKeyAlgorithm != x509.RSA {
+		t.Fatalf("Certificate not RSA: %v\n", cert.PublicKeyAlgorithm)
+	}
+	fmt.Printf("%x\n", cert.RawSubjectPublicKeyInfo)
+	sig, err := parsePSSPublicKeyInfo(cert.RawSubjectPublicKeyInfo)
+	if err != nil {
+		t.Fatalf("Failed to parse raw subject public key info: %v\n", err)
+	}
+	if sig != PSSPSSWithSHA256 {
+		t.Fatalf("Expected PSSPSSWithSHA256, got %v\n", sig)
 	}
 }
